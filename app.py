@@ -14,6 +14,27 @@ def health():
     return jsonify({'status': 'ok'})
 
 
+@app.route('/debug', methods=['GET'])
+def debug():
+    result = {'overlay_url': OVERLAY_URL}
+    try:
+        r = requests.get(OVERLAY_URL, timeout=30, allow_redirects=True)
+        result['download_status'] = r.status_code
+        result['content_type'] = r.headers.get('Content-Type', '')
+        result['content_length'] = len(r.content)
+        result['first_bytes'] = r.content[:16].hex()
+    except Exception as e:
+        result['download_error'] = str(e)
+
+    try:
+        out = subprocess.run(['ffmpeg', '-version'], capture_output=True, text=True, timeout=10)
+        result['ffmpeg'] = out.stdout.split('\n')[0]
+    except Exception as e:
+        result['ffmpeg_error'] = str(e)
+
+    return jsonify(result)
+
+
 @app.route('/process', methods=['POST'])
 def process_video():
     if 'video' not in request.files:
@@ -24,45 +45,45 @@ def process_video():
 
     video_file = request.files['video']
 
-    with tempfile.TemporaryDirectory() as tmpdir:
-        input_path = os.path.join(tmpdir, 'input.mp4')
-        overlay_path = os.path.join(tmpdir, 'overlay.tmp')
-        output_path = os.path.join(tmpdir, 'output.mp4')
+    try:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            input_path = os.path.join(tmpdir, 'input.mp4')
+            overlay_path = os.path.join(tmpdir, 'overlay.tmp')
+            output_path = os.path.join(tmpdir, 'output.mp4')
 
-        video_file.save(input_path)
+            video_file.save(input_path)
 
-        # Download overlay (GIF or video), follow redirects
-        r = requests.get(OVERLAY_URL, timeout=30, allow_redirects=True)
-        r.raise_for_status()
-        with open(overlay_path, 'wb') as f:
-            f.write(r.content)
+            r = requests.get(OVERLAY_URL, timeout=30, allow_redirects=True)
+            r.raise_for_status()
+            with open(overlay_path, 'wb') as f:
+                f.write(r.content)
 
-        # Overlay looping at 1/3 from bottom, centered horizontally
-        # Works with GIF, MP4, MOV — FFmpeg auto-detects format from content
-        cmd = [
-            'ffmpeg', '-y',
-            '-i', input_path,
-            '-stream_loop', '-1',
-            '-i', overlay_path,
-            '-filter_complex',
-            '[1:v]scale=iw*0.45:-1[ovr];[0:v][ovr]overlay=x=(W-w)/2:y=H*2/3',
-            '-shortest',
-            '-c:a', 'copy',
-            '-movflags', '+faststart',
-            output_path
-        ]
+            cmd = [
+                'ffmpeg', '-y',
+                '-i', input_path,
+                '-stream_loop', '-1',
+                '-i', overlay_path,
+                '-filter_complex',
+                '[1:v]scale=iw*0.45:-1[ovr];[0:v][ovr]overlay=x=(W-w)/2:y=H*2/3',
+                '-shortest',
+                '-c:a', 'copy',
+                '-movflags', '+faststart',
+                output_path
+            ]
 
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
 
-        if result.returncode != 0:
-            return jsonify({'error': result.stderr[-3000:]}), 500
+            if result.returncode != 0:
+                return jsonify({'error': result.stderr[-3000:]}), 500
 
-        return send_file(
-            output_path,
-            mimetype='video/mp4',
-            as_attachment=True,
-            download_name='processed.mp4'
-        )
+            return send_file(
+                output_path,
+                mimetype='video/mp4',
+                as_attachment=True,
+                download_name='processed.mp4'
+            )
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
 
 if __name__ == '__main__':
