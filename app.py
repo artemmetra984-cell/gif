@@ -6,7 +6,7 @@ from flask import Flask, request, send_file, jsonify
 
 app = Flask(__name__)
 
-GIF_URL = os.environ.get('GIF_URL', '')
+OVERLAY_URL = os.environ.get('GIF_URL', '')
 
 
 @app.route('/health', methods=['GET'])
@@ -19,33 +19,33 @@ def process_video():
     if 'video' not in request.files:
         return jsonify({'error': 'video file required'}), 400
 
-    if not GIF_URL:
+    if not OVERLAY_URL:
         return jsonify({'error': 'GIF_URL env variable not set'}), 500
 
     video_file = request.files['video']
 
     with tempfile.TemporaryDirectory() as tmpdir:
         input_path = os.path.join(tmpdir, 'input.mp4')
-        gif_path = os.path.join(tmpdir, 'overlay.gif')
+        overlay_path = os.path.join(tmpdir, 'overlay.tmp')
         output_path = os.path.join(tmpdir, 'output.mp4')
 
         video_file.save(input_path)
 
-        # Download GIF once per request
-        r = requests.get(GIF_URL, timeout=30)
+        # Download overlay (GIF or video), follow redirects
+        r = requests.get(OVERLAY_URL, timeout=30, allow_redirects=True)
         r.raise_for_status()
-        with open(gif_path, 'wb') as f:
+        with open(overlay_path, 'wb') as f:
             f.write(r.content)
 
-        # Overlay GIF looping at 1/3 from bottom, centered horizontally
-        # scale gif to 45% of video width; y=H*2/3 places top edge at 2/3 height (1/3 from bottom)
+        # Overlay looping at 1/3 from bottom, centered horizontally
+        # Works with GIF, MP4, MOV — FFmpeg auto-detects format from content
         cmd = [
             'ffmpeg', '-y',
             '-i', input_path,
             '-stream_loop', '-1',
-            '-i', gif_path,
+            '-i', overlay_path,
             '-filter_complex',
-            '[1:v]scale=iw*0.45:-1[gif];[0:v][gif]overlay=x=(W-w)/2:y=H*2/3',
+            '[1:v]scale=iw*0.45:-1[ovr];[0:v][ovr]overlay=x=(W-w)/2:y=H*2/3',
             '-shortest',
             '-c:a', 'copy',
             '-movflags', '+faststart',
